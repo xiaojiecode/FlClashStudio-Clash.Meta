@@ -102,10 +102,7 @@ func (d *relayDialer) DialContext(ctx context.Context, network, address string) 
 	if d.option.Forward {
 		targetAddress = ""
 	}
-	if err := writeRelayRequest(conn, relayCmdConnect, targetAddress, relayNetworkTCP, d.option.Username, d.option.Password); err != nil {
-		return nil, err
-	}
-	if err := readRelayConnectResponse(conn); err != nil {
+	if err := exchangeRelayRequest(ctx, conn, relayCmdConnect, targetAddress, relayNetworkTCP, d.option.Username, d.option.Password); err != nil {
 		return nil, err
 	}
 
@@ -138,10 +135,7 @@ func (d *relayDialer) ListenPacket(ctx context.Context, network, _ string, rAddr
 	if d.option.Forward {
 		targetAddress = ""
 	}
-	if err := writeRelayRequest(conn, relayCmdConnect|relayFlagUDP, targetAddress, relayNetworkUDP, d.option.Username, d.option.Password); err != nil {
-		return nil, err
-	}
-	if err := readRelayConnectResponse(conn); err != nil {
+	if err := exchangeRelayRequest(ctx, conn, relayCmdConnect|relayFlagUDP, targetAddress, relayNetworkUDP, d.option.Username, d.option.Password); err != nil {
 		return nil, err
 	}
 
@@ -150,6 +144,31 @@ func (d *relayDialer) ListenPacket(ctx context.Context, network, _ string, rAddr
 		conn:  conn,
 		raddr: raddr,
 	}, nil
+}
+
+func exchangeRelayRequest(ctx context.Context, conn net.Conn, command byte, address string, network uint16, username, password string) (err error) {
+	finished := make(chan struct{})
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-finished:
+		}
+	}()
+	defer func() {
+		close(finished)
+		<-watcherDone
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+	}()
+
+	if err := writeRelayRequest(conn, command, address, network, username, password); err != nil {
+		return err
+	}
+	return readRelayConnectResponse(conn)
 }
 
 func (d *relayDialer) dialRelayServer(ctx context.Context, fallbackAddress string) (net.Conn, error) {
